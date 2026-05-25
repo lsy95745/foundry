@@ -85,3 +85,17 @@ cast send $NFT \
   --rpc-url sepolia \
   --account lsy
 
+
+forge script script/NFTMarket.s.sol --account lsy --rpc-url sepolia --broadcast --verify
+
+
+forge verify-contract \
+  0x2049114d411189a2c1710a8514dadeaf66943939 \
+  src/NFTMarket.sol:NFTMarket \
+  --chain sepolia \
+  --rpc-url sepolia \
+  --etherscan-api-key $ETHERSCAN_API_KEY \
+  --constructor-args $(cast abi-encode "constructor(address,address)" \
+    0xbe5b554e68847ab94a606791df3f242bbe637203 \
+    0xfa8021606b9ee9555a64142ff0b81b31ec15ea82) \
+  --watch
