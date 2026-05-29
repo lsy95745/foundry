@@ -19,7 +19,7 @@ contract DeployAllScript is Script {
 
         token = new MyToken(1_000_000);
         nft = new MyNFT("MyNFT", "MNFT", msg.sender);
-        market = new NFTMarket(address(nft), address(token));
+        market = new NFTMarket(address(nft), address(token), msg.sender);
 
         vm.stopBroadcast();
     }

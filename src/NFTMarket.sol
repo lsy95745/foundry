@@ -1,16 +1,23 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.13;
+pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {Nonces} from "@openzeppelin/contracts/utils/Nonces.sol";
 import {ITokenReceiver} from "./interfaces/ITokenReceiver.sol";
 
 /// @title NFTMarket
-/// @dev 使用 ERC20 Token 购买托管在市场的 NFT
-contract NFTMarket is ITokenReceiver, ReentrancyGuard {
+/// @dev 使用 ERC20 Token 购买托管在市场的 NFT；`permitBuy` 需项目方对白名单地址的离线签名
+contract NFTMarket is ITokenReceiver, ReentrancyGuard, EIP712, Nonces {
     IERC721 public immutable nft;
     IERC20 public immutable paymentToken;
+    address public immutable whitelistSigner;
+
+    bytes32 private constant PERMIT_BUY_TYPEHASH =
+        keccak256("PermitBuy(address buyer,uint256 tokenId,uint256 nonce,uint256 deadline)");
 
     struct Listing {
         address seller;
@@ -29,10 +36,18 @@ contract NFTMarket is ITokenReceiver, ReentrancyGuard {
     error NFTMarket__WrongAmount();
     error NFTMarket__OnlyPaymentToken();
     error NFTMarket__TransferFailed();
+    error NFTMarket__ExpiredSignature(uint256 deadline);
+    error NFTMarket__InvalidWhitelistSignature(address signer);
 
-    constructor(address nft_, address paymentToken_) {
+    constructor(address nft_, address paymentToken_, address whitelistSigner_) EIP712("NFTMarket", "1") {
         nft = IERC721(nft_);
         paymentToken = IERC20(paymentToken_);
+        whitelistSigner = whitelistSigner_;
+    }
+
+    // solhint-disable-next-line func-name-mixedcase
+    function DOMAIN_SEPARATOR() external view returns (bytes32) {
+        return _domainSeparatorV4();
     }
 
     /// @notice 上架 NFT，NFT 转入市场托管
@@ -52,6 +67,29 @@ contract NFTMarket is ITokenReceiver, ReentrancyGuard {
     /// @param tokenId NFT id
     /// @param amount 支付的 TOKEN 数量，须等于挂牌价
     function buyNFT(uint256 tokenId, uint256 amount) external nonReentrant {
+        _purchase(tokenId, amount, msg.sender, false);
+    }
+
+    /// @notice 白名单用户凭项目方离线签名购买 NFT
+    /// @param tokenId 要购买的 NFT id
+    /// @param amount 支付的 TOKEN 数量，须等于挂牌价
+    /// @param deadline 签名过期时间
+    /// @param v ECDSA 签名分量
+    /// @param r ECDSA 签名分量
+    /// @param s ECDSA 签名分量
+    function permitBuy(uint256 tokenId, uint256 amount, uint256 deadline, uint8 v, bytes32 r, bytes32 s)
+        external
+        nonReentrant
+    {
+        if (block.timestamp > deadline) revert NFTMarket__ExpiredSignature(deadline);
+
+        bytes32 structHash = keccak256(
+            abi.encode(PERMIT_BUY_TYPEHASH, msg.sender, tokenId, _useNonce(msg.sender), deadline)
+        );
+        bytes32 digest = _hashTypedDataV4(structHash);
+        address signer = ECDSA.recover(digest, v, r, s);
+        if (signer != whitelistSigner) revert NFTMarket__InvalidWhitelistSignature(signer);
+
         _purchase(tokenId, amount, msg.sender, false);
     }
 

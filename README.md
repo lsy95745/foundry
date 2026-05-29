@@ -99,3 +99,17 @@ forge verify-contract \
     0xbe5b554e68847ab94a606791df3f242bbe637203 \
     0xfa8021606b9ee9555a64142ff0b81b31ec15ea82) \
   --watch
+
+
+  1. 在foundry文件中创建一个使用 EIP2612 标准（基于 Openzepplin 库）的 MyToken2612 合约
+  2. 创建一个TokenBank 存款取款合约 并支持 permitDeposit函数 以支持离线签名授权（permit）进行存款
+  3. NFTMarket.sol合约 添加功能 permitBuy() 实现只有离线授权的白名单地址才可以购买 NFT
+  白名单具体实现逻辑为：项目方给白名单地址签名，白名单用户拿到签名信息后，传给 permitBuy() 函数，在permitBuy()中判断时候是经过许可的白名单用户，如果是，才可以进行后续购买，否则 revert 。
+
+  给TokenBank.sol合约添加一个方法 depositWithPermit2()， 这个方式使用 permit2 进行签名授权转账来进行存款
+
+  web3-web项目里调用 TokenBank合约进行 permitDeposit 以支持离线签名授权的方式存款
+  MyToken2612
+
+
+

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.13;
+pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {MyToken} from "../src/MyToken.sol";
 import {MyNFT} from "../src/MyNFT.sol";
 import {NFTMarket} from "../src/NFTMarket.sol";
@@ -14,13 +15,20 @@ contract NFTMarketTest is Test {
     address public seller = makeAddr("seller");
     address public buyer = makeAddr("buyer");
 
+    uint256 constant WHITELIST_SIGNER_PK = 0xBEEF;
+    address whitelistSigner;
+
     uint256 constant INITIAL_SUPPLY = 1_000_000;
     uint256 constant PRICE = 100 * 1e18;
 
+    bytes32 private constant PERMIT_BUY_TYPEHASH =
+        keccak256("PermitBuy(address buyer,uint256 tokenId,uint256 nonce,uint256 deadline)");
+
     function setUp() public {
+        whitelistSigner = vm.addr(WHITELIST_SIGNER_PK);
         token = new MyToken(INITIAL_SUPPLY);
         nft = new MyNFT("MyNFT", "MNFT", address(this));
-        market = new NFTMarket(address(nft), address(token));
+        market = new NFTMarket(address(nft), address(token), whitelistSigner);
 
         token.transfer(seller, 10_000 * 1e18);
         token.transfer(buyer, 10_000 * 1e18);
@@ -86,6 +94,67 @@ contract NFTMarketTest is Test {
         assertEq(nft.ownerOf(0), seller);
         (address listedSeller,) = market.listings(0);
         assertEq(listedSeller, address(0));
+    }
+
+    function test_PermitBuy() public {
+        _listNFT(0, PRICE);
+        uint256 deadline = block.timestamp + 1 hours;
+        (uint8 v, bytes32 r, bytes32 s) = _signPermitBuy(buyer, 0, 0, deadline);
+
+        vm.startPrank(buyer);
+        token.approve(address(market), PRICE);
+        market.permitBuy(0, PRICE, deadline, v, r, s);
+        vm.stopPrank();
+
+        assertEq(nft.ownerOf(0), buyer);
+        assertEq(token.balanceOf(seller), 10_000 * 1e18 + PRICE);
+    }
+
+    function test_PermitBuy_RevertWhenInvalidSigner() public {
+        _listNFT(0, PRICE);
+        uint256 deadline = block.timestamp + 1 hours;
+        (uint8 v, bytes32 r, bytes32 s) = _signPermitBuy(buyer, 0, 0, deadline);
+
+        address notWhitelisted = makeAddr("notWhitelisted");
+        address recovered = _recoveredSigner(notWhitelisted, 0, 0, deadline, v, r, s);
+        vm.startPrank(notWhitelisted);
+        token.approve(address(market), PRICE);
+        vm.expectRevert(abi.encodeWithSelector(NFTMarket.NFTMarket__InvalidWhitelistSignature.selector, recovered));
+        market.permitBuy(0, PRICE, deadline, v, r, s);
+        vm.stopPrank();
+    }
+
+    function test_PermitBuy_RevertWithoutWhitelistSignature() public {
+        _listNFT(0, PRICE);
+        uint256 deadline = block.timestamp + 1 hours;
+        (uint8 v, bytes32 r, bytes32 s) = _signPermitBuy(makeAddr("other"), 0, 0, deadline);
+
+        address recovered = _recoveredSigner(buyer, 0, 0, deadline, v, r, s);
+        vm.startPrank(buyer);
+        token.approve(address(market), PRICE);
+        vm.expectRevert(abi.encodeWithSelector(NFTMarket.NFTMarket__InvalidWhitelistSignature.selector, recovered));
+        market.permitBuy(0, PRICE, deadline, v, r, s);
+        vm.stopPrank();
+    }
+
+    function _recoveredSigner(address buyerAddr, uint256 tokenId, uint256 nonce, uint256 deadline, uint8 v, bytes32 r, bytes32 s)
+        internal
+        view
+        returns (address)
+    {
+        bytes32 structHash = keccak256(abi.encode(PERMIT_BUY_TYPEHASH, buyerAddr, tokenId, nonce, deadline));
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", market.DOMAIN_SEPARATOR(), structHash));
+        return ECDSA.recover(digest, v, r, s);
+    }
+
+    function _signPermitBuy(address buyerAddr, uint256 tokenId, uint256 nonce, uint256 deadline)
+        internal
+        view
+        returns (uint8 v, bytes32 r, bytes32 s)
+    {
+        bytes32 structHash = keccak256(abi.encode(PERMIT_BUY_TYPEHASH, buyerAddr, tokenId, nonce, deadline));
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", market.DOMAIN_SEPARATOR(), structHash));
+        (v, r, s) = vm.sign(WHITELIST_SIGNER_PK, digest);
     }
 
     function _listNFT(uint256 tokenId, uint256 price) internal {
